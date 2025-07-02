@@ -397,7 +397,7 @@ namespace Sixnet.Database.DaMeng
                 }
                 foreach (var tableName in newTableInfo.TableNames)
                 {
-                    var realTableName = DaMengManager.DaMengOptions.Uppercase ? tableName.ToUpper() : tableName;
+                    var realTableName = SixnetDataManager.HandleDatabaseWordAndName(DaMengManager.CurrentDatabaseServerType, tableName);
                     var createTableStatement = new ExecutionDatabaseStatement()
                     {
                         Script = $"DECLARE TB_EX NUMBER; BEGIN SELECT COUNT(*) INTO TB_EX FROM user_tables WHERE table_name = '{realTableName}'; IF TB_EX =0 THEN EXECUTE IMMEDIATE 'CREATE TABLE {realTableName} ({string.Join(",", newFieldScripts)}{(primaryKeyNames.IsNullOrEmpty() ? "" : $", CONSTRAINT PK_{realTableName} PRIMARY KEY ({string.Join(",", primaryKeyNames)})")})'; END IF; END;"

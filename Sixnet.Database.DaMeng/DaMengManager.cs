@@ -70,10 +70,7 @@ namespace Sixnet.Database.DaMeng
 
         internal static string FormatKeyword(string originalValue)
         {
-            if (DaMengOptions.Uppercase)
-            {
-                originalValue = originalValue.ToUpper();
-            }
+            originalValue = SixnetDataManager.HandleDatabaseWordAndName(CurrentDatabaseServerType, originalValue);
             if (DaMengOptions.WrapWithQuotes)
             {
                 originalValue = $"{WrapKeyword(originalValue)}";
