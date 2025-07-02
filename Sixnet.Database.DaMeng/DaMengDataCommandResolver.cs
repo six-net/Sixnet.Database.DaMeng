@@ -27,7 +27,8 @@ namespace Sixnet.Database.DaMeng
             DatabaseType = DatabaseType.DaMeng;
             DefaultFieldFormatter = new DaMengDefaultFieldFormatter();
             ParameterPrefix = ":";
-            WrapKeywordFunc = DaMengManager.FormatKeyword;
+            FormatKeywordFunc = DaMengManager.FormatKeyword;
+            WrapKeywordFunc = DaMengManager.WrapKeyword;
             TablePetNameKeyword = " ";
             RecursiveKeyword = "WITH";
             UseFieldForRecursive = true;
@@ -204,7 +205,7 @@ namespace Sixnet.Database.DaMeng
                     }
                 }
                 // fields
-                insertFields.Add(WrapKeywordFunc(field.GetFieldName(DatabaseType)));
+                insertFields.Add(FormatAndWrapKeywordFunc(field.GetFieldName(DatabaseType)));
                 // values
                 var insertValue = command.FieldsAssignment.GetNewValue(field.PropertyName);
                 insertValues.Add(FormatInsertValueField(context, command.Queryable, insertValue));
@@ -230,7 +231,7 @@ namespace Sixnet.Database.DaMeng
             if (autoIncrementField != null)
             {
                 var idOutputParameterName = FormatParameterName(command.Id);
-                incrementFieldScript = $" RETURNING {WrapKeywordFunc(autoIncrementField.GetFieldName(DatabaseType))} INTO {idOutputParameterName}";
+                incrementFieldScript = $" RETURNING {FormatAndWrapKeywordFunc(autoIncrementField.GetFieldName(DatabaseType))} INTO {idOutputParameterName}";
                 context.AddOutputParameter(command.Id, autoIncrementField.GetDataType().GetDbType());
             }
 
@@ -241,7 +242,7 @@ namespace Sixnet.Database.DaMeng
             {
                 statements.Add(new ExecutionDatabaseStatement()
                 {
-                    Script = string.Format(scriptTemplate, WrapKeywordFunc(tableName)),
+                    Script = string.Format(scriptTemplate, FormatAndWrapKeywordFunc(tableName)),
                     ScriptType = GetCommandType(command),
                     Parameters = context.GetParameters(),
                     MustAffectData = true
@@ -290,7 +291,7 @@ namespace Sixnet.Database.DaMeng
                 var propertyName = newValueItem.Key;
                 var updateField = SixnetDataManager.GetField(dataCommandExecutionContext.Server.DatabaseType, command.GetEntityType(), DataField.Create(propertyName)) as DataField;
                 SixnetDirectThrower.ThrowSixnetExceptionIf(updateField == null, $"Not found field:{propertyName}");
-                var fieldFormattedName = WrapKeywordFunc(updateField.GetFieldName(DatabaseType));
+                var fieldFormattedName = FormatAndWrapKeywordFunc(updateField.GetFieldName(DatabaseType));
                 var newValueExpression = FormatUpdateValueField(context, command, newValue);
                 updateSetArray.Add($"{fieldFormattedName}={newValueExpression}");
             }
@@ -318,7 +319,7 @@ namespace Sixnet.Database.DaMeng
             {
                 statements.Add(new ExecutionDatabaseStatement()
                 {
-                    Script = string.Format(scriptTemplate, WrapKeywordFunc(tableName)),
+                    Script = string.Format(scriptTemplate, FormatAndWrapKeywordFunc(tableName)),
                     ScriptType = GetCommandType(command),
                     Parameters = parameters,
                     MustAffectData = true,
@@ -386,7 +387,7 @@ namespace Sixnet.Database.DaMeng
             {
                 statements.Add(new ExecutionDatabaseStatement()
                 {
-                    Script = string.Format(scriptTemplate, WrapKeywordFunc(tableName)),
+                    Script = string.Format(scriptTemplate, FormatAndWrapKeywordFunc(tableName)),
                     ScriptType = GetCommandType(command),
                     MustAffectData = true,
                     Parameters = parameters,
@@ -445,7 +446,7 @@ namespace Sixnet.Database.DaMeng
                 }
                 foreach (var tableName in newTableInfo.TableNames)
                 {
-                    var realTableName = SixnetDataManager.HandleDatabaseWordAndName(DaMengManager.CurrentDatabaseServerType, tableName);
+                    var realTableName = FormatKeywordFunc(tableName);
                     var createTableStatement = new ExecutionDatabaseStatement()
                     {
                         Script = $"DECLARE TB_EX NUMBER; BEGIN SELECT COUNT(*) INTO TB_EX FROM user_tables WHERE table_name = '{realTableName}'; IF TB_EX =0 THEN EXECUTE IMMEDIATE 'CREATE TABLE {realTableName} ({string.Join(",", newFieldScripts)}{(primaryKeyNames.IsNullOrEmpty() ? "" : $", CONSTRAINT PK_{realTableName} PRIMARY KEY ({string.Join(",", primaryKeyNames)})")})'; END IF; END;"

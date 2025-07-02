@@ -70,12 +70,7 @@ namespace Sixnet.Database.DaMeng
 
         internal static string FormatKeyword(string originalValue)
         {
-            originalValue = SixnetDataManager.HandleDatabaseWordAndName(CurrentDatabaseServerType, originalValue);
-            if (DaMengOptions.WrapWithQuotes)
-            {
-                originalValue = $"{WrapKeyword(originalValue)}";
-            }
-            return originalValue;
+            return SixnetDataManager.HandleDatabaseWordAndName(CurrentDatabaseServerType, originalValue);
         }
 
         #endregion
