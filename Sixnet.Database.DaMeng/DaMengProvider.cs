@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using System.Data;
 using System.Threading.Tasks;
+
 using Dm;
+
 using Sixnet.Development.Data.Command;
 using Sixnet.Development.Data.Dapper;
 using Sixnet.Development.Data.Database;
@@ -13,13 +15,13 @@ namespace Sixnet.Database.DaMeng
     /// <summary>
     /// Defines database provider implementation for DaMeng
     /// </summary>
-    public class DaMengProvider : BaseDatabaseProvider
+    public class DaMengProvider : SixnetBaseDatabaseProvider
     {
         #region Constructor
 
         public DaMengProvider()
         {
-            queryDatabaseTablesScript = "SELECT TABLE_NAME AS \"TableName\" FROM USER_TABLES WHERE TABLE_NAME NOT LIKE '%$%' AND TABLE_NAME NOT LIKE '%LOGMNRC_%' AND TABLE_NAME NOT LIKE '%LOGMNR%' AND TABLE_NAME NOT LIKE '%SQLPLUS_%' AND TABLE_NAME!='HELP' AND TABLE_NAME!= 'REDO_DB' AND TABLE_NAME!='REDO_LOG' AND TABLE_NAME!='SCHEDULER_PROGRAM_ARGS_TBL' AND TABLE_NAME!='SCHEDULER_JOB_ARGS_TBL'";
+            queryTablesScript = "SELECT TABLE_NAME AS \"TableName\" FROM USER_TABLES WHERE TABLE_NAME NOT LIKE '%$%' AND TABLE_NAME NOT LIKE '%LOGMNRC_%' AND TABLE_NAME NOT LIKE '%LOGMNR%' AND TABLE_NAME NOT LIKE '%SQLPLUS_%' AND TABLE_NAME!='HELP' AND TABLE_NAME!= 'REDO_DB' AND TABLE_NAME!='REDO_LOG' AND TABLE_NAME!='SCHEDULER_PROGRAM_ARGS_TBL' AND TABLE_NAME!='SCHEDULER_JOB_ARGS_TBL'";
         }
 
         #endregion
@@ -31,9 +33,26 @@ namespace Sixnet.Database.DaMeng
         /// </summary>
         /// <param name="server">Database server</param>
         /// <returns></returns>
-        public override IDbConnection GetDbConnection(DatabaseServer server)
+        public override IDbConnection GetDbConnection(SixnetDatabaseServer server)
         {
             return DaMengManager.GetConnection(server);
+        }
+
+        /// <summary>
+        /// Get db connection meta
+        /// </summary>
+        /// <param name="connection"></param>
+        /// <returns></returns>
+        public override SixnetDatabaseConnectionMeta GetDbConnectionMeta(IDbConnection connection)
+        {
+            var sqlBuilder = new DmConnectionStringBuilder(connection.ConnectionString);
+            return new SixnetDatabaseConnectionMeta()
+            {
+                UserName = sqlBuilder.User,
+                Password = sqlBuilder.Password,
+                DataSource = sqlBuilder.Server,
+                DatabaseName = sqlBuilder.Database,
+            };
         }
 
         #endregion
@@ -58,7 +77,7 @@ namespace Sixnet.Database.DaMeng
         /// </summary>
         /// <param name="parameters">Data command parameters</param>
         /// <returns></returns>
-        protected override DynamicParameters ConvertDataCommandParameters(DataCommandParameters parameters)
+        protected override DynamicParameters ConvertDataCommandParameters(SixnetDataCommandParameters parameters)
         {
             return parameters?.ConvertToDynamicParameters(DaMengManager.CurrentDatabaseServerType);
         }
@@ -72,7 +91,7 @@ namespace Sixnet.Database.DaMeng
         /// </summary>
         /// <param name="command">Database multiple command</param>
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
-        public override Dictionary<string, TIdentity> InsertAndReturnIdentity<TIdentity>(MultipleDatabaseCommand command)
+        public override Dictionary<string, TIdentity> InsertAndReturnIdentity<TIdentity>(SixnetMultipleDatabaseCommand command)
         {
             var dataCommandResolver = GetDataCommandResolver() as DaMengDataCommandResolver;
             var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
@@ -101,7 +120,7 @@ namespace Sixnet.Database.DaMeng
         /// </summary>
         /// <param name="command">Database multiple command</param>
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
-        public override async Task<Dictionary<string, TIdentity>> InsertAndReturnIdentityAsync<TIdentity>(MultipleDatabaseCommand command)
+        public override async Task<Dictionary<string, TIdentity>> InsertAndReturnIdentityAsync<TIdentity>(SixnetMultipleDatabaseCommand command)
         {
             var dataCommandResolver = GetDataCommandResolver() as DaMengDataCommandResolver;
             var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
@@ -135,7 +154,7 @@ namespace Sixnet.Database.DaMeng
         /// <param name="server">Database server</param>
         /// <param name="dataTable">Data table</param>
         /// <param name="bulkInsertOptions">Insert options</param>
-        public override async Task BulkInsertAsync(BulkInsertDatabaseCommand command)
+        public override async Task BulkInsertAsync(SixnetBulkInsertDatabaseCommand command)
         {
             BulkInsert(command);
             await Task.CompletedTask.ConfigureAwait(false);
@@ -147,16 +166,17 @@ namespace Sixnet.Database.DaMeng
         /// <param name="server">Database server</param>
         /// <param name="dataTable">Data table</param>
         /// <param name="bulkInsertOptions">Insert options</param>
-        public override void BulkInsert(BulkInsertDatabaseCommand command)
+        public override void BulkInsert(SixnetBulkInsertDatabaseCommand command)
         {
             try
             {
                 var dataTable = command.DataTable;
-                SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(BulkInsertDatabaseCommand.DataTable));
+                SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(SixnetBulkInsertDatabaseCommand.DataTable));
 
                 var dmBulkInsertOptions = command.BulkInsertionOptions as DaMengBulkInsertionOptions;
                 dmBulkInsertOptions ??= new DaMengBulkInsertionOptions();
                 var conn = command.Connection.DbConnection as DmConnection;
+                var dmResolver = DaMengManager.GetCommandResolver();
                 using (var dmBulkCopy = new DmBulkCopy(conn))
                 {
                     dmBulkCopy.DestinationTableName = dataTable.TableName;
@@ -164,7 +184,7 @@ namespace Sixnet.Database.DaMeng
                     {
                         dmBulkInsertOptions.ColumnMappings.ForEach(c =>
                         {
-                            c.DestinationColumn = DaMengManager.FormatKeyword(c.DestinationColumn);
+                            c.DestinationColumn = dmResolver.GetObjectFullName(dmResolver.FormatObjectName(SixnetDatabaseObjectName.Create(c.DestinationColumn, Development.Data.SixnetDatabaseObjectType.Column)));
                             dmBulkCopy.ColumnMappings.Add(c);
                         });
                     }
@@ -172,8 +192,8 @@ namespace Sixnet.Database.DaMeng
                     {
                         foreach (DataColumn column in dataTable.Columns)
                         {
-                            string destName = column.ColumnName;
-                            destName = DaMengManager.FormatKeyword(destName);
+                            var destName = column.ColumnName;
+                            destName = dmResolver.GetObjectFullName(dmResolver.FormatObjectName(SixnetDatabaseObjectName.Create(destName, Development.Data.SixnetDatabaseObjectType.Column)));
                             dmBulkCopy.ColumnMappings.Add(new DmBulkCopyColumnMapping()
                             {
                                 SourceColumn = column.ColumnName,
@@ -193,7 +213,7 @@ namespace Sixnet.Database.DaMeng
                     {
                         dmBulkCopy.NotifyAfter = dmBulkInsertOptions.NotifyAfter;
                     }
-                    dmBulkCopy.DestinationTableName = DaMengManager.FormatKeyword(dmBulkCopy.DestinationTableName);
+                    dmBulkCopy.DestinationTableName = dmResolver.GetObjectFullName(dmResolver.FormatObjectName(SixnetDatabaseObjectName.Create(dmBulkCopy.DestinationTableName, Development.Data.SixnetDatabaseObjectType.Column)));
                     dmBulkCopy.WriteToServer(dataTable);
                 }
             }

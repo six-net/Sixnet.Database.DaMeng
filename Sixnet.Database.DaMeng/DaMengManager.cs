@@ -15,17 +15,7 @@ namespace Sixnet.Database.DaMeng
         /// <summary>
         /// Gets current database server type
         /// </summary>
-        internal const DatabaseType CurrentDatabaseServerType = DatabaseType.DaMeng;
-
-        /// <summary>
-        /// Key word prefix
-        /// </summary>
-        internal const string KeywordPrefix = "\"";
-
-        /// <summary>
-        /// Key word suffix
-        /// </summary>
-        internal const string KeywordSuffix = "\"";
+        internal const SixnetDatabaseType CurrentDatabaseServerType = SixnetDatabaseType.DaMeng;
 
         /// <summary>
         /// DaMeng options
@@ -46,9 +36,9 @@ namespace Sixnet.Database.DaMeng
         /// </summary>
         /// <param name="server">Database server</param>
         /// <returns>Return database connection</returns>
-        internal static IDbConnection GetConnection(DatabaseServer server)
+        internal static IDbConnection GetConnection(SixnetDatabaseServer server)
         {
-            return SixnetDataManager.GetDatabaseConnection(server) ?? new DmConnection(server.ConnectionString);
+            return SixnetDataManager.GetDatabaseConnection(server) ?? new DmConnection(SixnetDataManager.ResolveConnectionString(server));
         }
 
         #endregion
@@ -62,34 +52,6 @@ namespace Sixnet.Database.DaMeng
         internal static DaMengDataCommandResolver GetCommandResolver()
         {
             return DefaultResolver;
-        }
-
-        #endregion
-
-        #region Format keyword
-
-        internal static string FormatKeyword(string originalValue)
-        {
-            originalValue = SixnetDataManager.HandleDatabaseWordAndName(CurrentDatabaseServerType, originalValue);
-            if (DaMengOptions.WrapWithQuotes)
-            {
-                originalValue = $"{WrapKeyword(originalValue)}";
-            }
-            return originalValue;
-        }
-
-        #endregion
-
-        #region Wrap keyword
-
-        /// <summary>
-        /// Wrap keyword by the KeywordPrefix and the KeywordSuffix
-        /// </summary>
-        /// <param name="originalValue">Original value</param>
-        /// <returns></returns>
-        internal static string WrapKeyword(string originalValue)
-        {
-            return $"{KeywordPrefix}{originalValue}{KeywordSuffix}";
         }
 
         #endregion
