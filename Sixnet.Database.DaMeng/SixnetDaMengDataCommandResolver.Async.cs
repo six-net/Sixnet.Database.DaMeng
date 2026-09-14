@@ -13,7 +13,7 @@ using System.Linq;
 
 namespace Sixnet.Database.DaMeng
 {
-    public partial class DaMengDataCommandResolver
+    public partial class SixnetDaMengDataCommandResolver
     {
         #region Get query statement
 
@@ -29,7 +29,7 @@ namespace Sixnet.Database.DaMeng
             var queryable = translationResult.GetOriginalQueryable();
             string sqlStatement;
             IEnumerable<ISixnetField> outputFields = null;
-            switch (queryable.ExecutionMode)
+            switch (queryable.Info.ExecutionMode)
             {
                 case SixnetQueryableExecutionMode.Script:
                     sqlStatement = translationResult.GetCondition();
@@ -42,7 +42,7 @@ namespace Sixnet.Database.DaMeng
                     var sort = translationResult.GetSort();
                     var hasSort = !string.IsNullOrWhiteSpace(sort);
                     //limit
-                    var limit = GetLimitString(queryable.SkipCount, queryable.TakeCount, hasSort);
+                    var limit = GetLimitString(queryable.Info.SkipCount, queryable.Info.TakeCount, hasSort);
                     //combine
                     var combine = translationResult.GetCombine();
                     var hasCombine = !string.IsNullOrWhiteSpace(combine);
@@ -72,7 +72,7 @@ namespace Sixnet.Database.DaMeng
                     }
 
                     // output fields
-                    if (outputFields.IsNullOrEmpty() || !queryable.SelectedFields.IsNullOrEmpty())
+                    if (outputFields.IsNullOrEmpty() || !queryable.Info.SelectedFields.IsNullOrEmpty())
                     {
                         outputFields = SixnetDataManager.GetQueryableFields(DatabaseType, queryable.GetModelType(), queryable, context.IsRootQueryable(queryable));
                     }
@@ -81,7 +81,7 @@ namespace Sixnet.Database.DaMeng
                     var preScript = GetPreScript(context, location);
                     //statement
                     sqlStatement = $"SELECT{GetDistinctString(queryable)} {outputFieldString} FROM {targetScript}{sort}{limit}";
-                    switch (queryable.OutputType)
+                    switch (queryable.Info.OutputType)
                     {
                         case SixnetQueryableOutputType.Count:
                             sqlStatement = hasCombine
@@ -92,6 +92,14 @@ namespace Sixnet.Database.DaMeng
                             sqlStatement = hasCombine
                                 ? $"{preScript}SELECT CASE WHEN EXISTS(({sqlStatement}){combine}) THEN 1 ELSE 0 END FROM DUAL"
                                 : $"{preScript}SELECT CASE WHEN EXISTS({sqlStatement}) THEN 1 ELSE 0 END FROM DUAL";
+                            break;
+                        case SixnetQueryableOutputType.TempTable:
+                            sqlStatement = hasCombine
+                            ? hasSort
+                                ? $"(SELECT {tablePetName}.* FROM ({sqlStatement}){TablePetNameKeyword}{tablePetName}){combine}"
+                                : $"({sqlStatement}){combine}"
+                            : $"{sqlStatement}";
+                            sqlStatement = $"CREATE GLOBAL TEMPORARY TABLE {queryable.Info.TempTableName} ON COMMIT DELETE ROWS AS SELECT * FROM ({sqlStatement})";
                             break;
                         default:
                             sqlStatement = hasCombine
@@ -105,13 +113,7 @@ namespace Sixnet.Database.DaMeng
             //parameters
             var parameters = context.GetParameters();
 
-            //log script
-            if (location == SixnetQueryableLocation.Top)
-            {
-                LogScript(sqlStatement, parameters);
-            }
-
-            return SixnetQueryDatabaseStatement.Create(sqlStatement, parameters, outputFields);
+            return SixnetQueryDatabaseStatement.Create(DatabaseType, location, sqlStatement, parameters, outputFields);
         }
 
         #endregion
@@ -186,13 +188,13 @@ namespace Sixnet.Database.DaMeng
             var statements = new List<SixnetExecutionDatabaseStatement>();
             foreach (var tableName in tableNames)
             {
-                statements.Add(new SixnetExecutionDatabaseStatement()
+                statements.Add(SixnetExecutionDatabaseStatement.Create(DatabaseType, data =>
                 {
-                    Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName)),
-                    ScriptType = GetCommandType(command),
-                    Parameters = context.GetParameters(),
-                    MustAffectData = true
-                });
+                    data.Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName));
+                    data.ScriptType = GetCommandType(command);
+                    data.Parameters = context.GetParameters();
+                    data.MustAffectData = true;
+                }));
             }
 
             return statements;
@@ -263,14 +265,14 @@ namespace Sixnet.Database.DaMeng
             var statements = new List<SixnetExecutionDatabaseStatement>();
             foreach (var tableName in tableNames)
             {
-                statements.Add(new SixnetExecutionDatabaseStatement()
+                statements.Add(SixnetExecutionDatabaseStatement.Create(DatabaseType, data =>
                 {
-                    Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName)),
-                    ScriptType = GetCommandType(command),
-                    Parameters = parameters,
-                    MustAffectData = true,
-                    HasPreScript = !preScripts.IsNullOrEmpty()
-                });
+                    data.Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName));
+                    data.ScriptType = GetCommandType(command);
+                    data.Parameters = parameters;
+                    data.MustAffectData = true;
+                    data.HasPreScript = !preScripts.IsNullOrEmpty();
+                }));
             }
 
             #endregion
@@ -336,14 +338,15 @@ namespace Sixnet.Database.DaMeng
             var statements = new List<SixnetExecutionDatabaseStatement>();
             foreach (var tableName in tableNames)
             {
-                statements.Add(new SixnetExecutionDatabaseStatement()
+                statements.Add(SixnetExecutionDatabaseStatement.Create(DatabaseType, data =>
                 {
-                    Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName)),
-                    ScriptType = GetCommandType(command),
-                    MustAffectData = true,
-                    Parameters = parameters,
-                    HasPreScript = !string.IsNullOrWhiteSpace(preScript)
-                });
+                    data.Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName));
+                    data.ScriptType = GetCommandType(command);
+                    data.MustAffectData = true;
+                    data.Parameters = parameters;
+                    data.HasPreScript = !string.IsNullOrWhiteSpace(preScript);
+
+                }));
             }
 
             #endregion

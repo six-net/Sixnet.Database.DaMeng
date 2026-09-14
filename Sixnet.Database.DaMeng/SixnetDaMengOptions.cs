@@ -3,7 +3,7 @@
     /// <summary>
     /// Defines DaMeng options
     /// </summary>
-    public class DaMengOptions
+    public class SixnetDaMengOptions
     {
         /// <summary>
         /// Indicates whether formatting guid

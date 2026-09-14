@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System;
+
 using Sixnet.Development.Data.Field.Formatting;
 using Sixnet.Exceptions;
 
@@ -8,7 +9,7 @@ namespace Sixnet.Database.DaMeng
     /// <summary>
     /// Default default field formatter for DaMeng
     /// </summary>
-    public class DaMengDefaultFieldFormatter : ISixnetFieldFormatter
+    public class SixnetDaMengDefaultFieldFormatter : ISixnetFieldFormatter
     {
         public string Format(SixnetFormatFieldContext context)
         {
@@ -69,7 +70,9 @@ namespace Sixnet.Database.DaMeng
                 SixnetFieldFormatterNames.MATH_TAN => $"TAN({formatedFieldName})",
                 SixnetFieldFormatterNames.STRING_INDEX_OF => StringIndexOf(formatedFieldName, formatOption.Parameter),
                 SixnetFieldFormatterNames.STRING_LAST_INDEX_OF => StringLastIndexOf(formatedFieldName, formatOption.Parameter),
-                _ => throw new SixnetException($"{DaMengManager.CurrentDatabaseServerType} does not support field formatter: {formatOption.Name}"),
+                SixnetFieldFormatterNames.EXISTS => $"EXISTS{formatedFieldName}",
+                SixnetFieldFormatterNames.NOT_EXISTS => $"NOT EXISTS{formatedFieldName}",
+                _ => throw new SixnetException($"{SixnetDaMengManager.CurrentDatabaseServerType} does not support field formatter: {formatOption.Name}"),
             };
 
             return formatedFieldName;

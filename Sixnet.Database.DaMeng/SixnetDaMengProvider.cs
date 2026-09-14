@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 
 using Dm;
 
+using Sixnet.Development.Data;
 using Sixnet.Development.Data.Command;
 using Sixnet.Development.Data.Dapper;
 using Sixnet.Development.Data.Database;
@@ -15,12 +16,13 @@ namespace Sixnet.Database.DaMeng
     /// <summary>
     /// Defines database provider implementation for DaMeng
     /// </summary>
-    public class DaMengProvider : SixnetBaseDatabaseProvider
+    public class SixnetDaMengProvider : SixnetBaseDatabaseProvider
     {
         #region Constructor
 
-        public DaMengProvider()
+        public SixnetDaMengProvider()
         {
+            recordTempTable = true;
             queryTablesScript = "SELECT TABLE_NAME AS \"TableName\" FROM USER_TABLES WHERE TABLE_NAME NOT LIKE '%$%' AND TABLE_NAME NOT LIKE '%LOGMNRC_%' AND TABLE_NAME NOT LIKE '%LOGMNR%' AND TABLE_NAME NOT LIKE '%SQLPLUS_%' AND TABLE_NAME!='HELP' AND TABLE_NAME!= 'REDO_DB' AND TABLE_NAME!='REDO_LOG' AND TABLE_NAME!='SCHEDULER_PROGRAM_ARGS_TBL' AND TABLE_NAME!='SCHEDULER_JOB_ARGS_TBL'";
         }
 
@@ -35,7 +37,7 @@ namespace Sixnet.Database.DaMeng
         /// <returns></returns>
         public override IDbConnection GetDbConnection(SixnetDatabaseServer server)
         {
-            return DaMengManager.GetConnection(server);
+            return SixnetDaMengManager.GetConnection(server);
         }
 
         /// <summary>
@@ -63,9 +65,9 @@ namespace Sixnet.Database.DaMeng
         /// Get data command resolver
         /// </summary>
         /// <returns></returns>
-        protected override ISixnetDataCommandResolver GetDataCommandResolver()
+        protected override ISixnetDataCommandResolver GetDataCommandResolver(SixnetDatabaseCommand command)
         {
-            return DaMengManager.GetCommandResolver();
+            return SixnetDaMengManager.GetCommandResolver();
         }
 
         #endregion
@@ -77,9 +79,9 @@ namespace Sixnet.Database.DaMeng
         /// </summary>
         /// <param name="parameters">Data command parameters</param>
         /// <returns></returns>
-        protected override DynamicParameters ConvertDataCommandParameters(SixnetDataCommandParameters parameters)
+        protected override DynamicParameters ConvertDataCommandParameters(SixnetDatabaseCommand command, SixnetDataCommandParameters parameters)
         {
-            return parameters?.ConvertToDynamicParameters(DaMengManager.CurrentDatabaseServerType);
+            return parameters?.ConvertToDynamicParameters(SixnetDaMengManager.CurrentDatabaseServerType);
         }
 
         #endregion
@@ -93,7 +95,7 @@ namespace Sixnet.Database.DaMeng
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
         public override Dictionary<string, TIdentity> InsertAndReturnIdentity<TIdentity>(SixnetMultipleDatabaseCommand command)
         {
-            var dataCommandResolver = GetDataCommandResolver() as DaMengDataCommandResolver;
+            var dataCommandResolver = GetDataCommandResolver(command) as SixnetDaMengDataCommandResolver;
             var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
             var identityDict = new Dictionary<string, TIdentity>();
             var dbConnection = command.Connection.DbConnection;
@@ -122,7 +124,7 @@ namespace Sixnet.Database.DaMeng
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
         public override async Task<Dictionary<string, TIdentity>> InsertAndReturnIdentityAsync<TIdentity>(SixnetMultipleDatabaseCommand command)
         {
-            var dataCommandResolver = GetDataCommandResolver() as DaMengDataCommandResolver;
+            var dataCommandResolver = GetDataCommandResolver(command) as SixnetDaMengDataCommandResolver;
             var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
             var identityDict = new Dictionary<string, TIdentity>();
             var dbConnection = command.Connection.DbConnection;
@@ -170,21 +172,21 @@ namespace Sixnet.Database.DaMeng
         {
             try
             {
-                var dataTable = command.DataTable;
+                var dataTable = command.DataTable.Clone();
+                dataTable.ImportRow(command.DataTable.Rows[0]);
                 SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(SixnetBulkInsertDatabaseCommand.DataTable));
 
-                var dmBulkInsertOptions = command.BulkInsertionOptions as DaMengBulkInsertionOptions;
-                dmBulkInsertOptions ??= new DaMengBulkInsertionOptions();
+                var dmBulkInsertOptions = command.BulkInsertionOptions as SixnetDaMengBulkInsertionOptions;
+                dmBulkInsertOptions ??= new SixnetDaMengBulkInsertionOptions();
                 var conn = command.Connection.DbConnection as DmConnection;
-                var dmResolver = DaMengManager.GetCommandResolver();
-                using (var dmBulkCopy = new DmBulkCopy(conn))
+                var dmResolver = SixnetDaMengManager.GetCommandResolver();
+                using (var dmBulkCopy = new DmBulkCopy2(conn))
                 {
-                    dmBulkCopy.DestinationTableName = dataTable.TableName;
                     if (!dmBulkInsertOptions.ColumnMappings.IsNullOrEmpty())
                     {
                         dmBulkInsertOptions.ColumnMappings.ForEach(c =>
                         {
-                            c.DestinationColumn = dmResolver.GetObjectFullName(dmResolver.FormatObjectName(SixnetDatabaseObjectName.Create(c.DestinationColumn, Development.Data.SixnetDatabaseObjectType.Column)));
+                            c.DestinationColumn = dmResolver.WrapObjectName(dmResolver.FormatObjectName(SixnetDatabaseObjectName.Create(c.DestinationColumn, Development.Data.SixnetDatabaseObjectType.Column))).Name;
                             dmBulkCopy.ColumnMappings.Add(c);
                         });
                     }
@@ -193,7 +195,7 @@ namespace Sixnet.Database.DaMeng
                         foreach (DataColumn column in dataTable.Columns)
                         {
                             var destName = column.ColumnName;
-                            destName = dmResolver.GetObjectFullName(dmResolver.FormatObjectName(SixnetDatabaseObjectName.Create(destName, Development.Data.SixnetDatabaseObjectType.Column)));
+                            destName = dmResolver.WrapObjectName(dmResolver.FormatObjectName(SixnetDatabaseObjectName.Create(destName, Development.Data.SixnetDatabaseObjectType.Column))).Name;
                             dmBulkCopy.ColumnMappings.Add(new DmBulkCopyColumnMapping()
                             {
                                 SourceColumn = column.ColumnName,
@@ -209,11 +211,8 @@ namespace Sixnet.Database.DaMeng
                     {
                         dmBulkCopy.BatchSize = dmBulkInsertOptions.BatchSize;
                     }
-                    if (dmBulkInsertOptions.NotifyAfter > 0)
-                    {
-                        dmBulkCopy.NotifyAfter = dmBulkInsertOptions.NotifyAfter;
-                    }
-                    dmBulkCopy.DestinationTableName = dmResolver.GetObjectFullName(dmResolver.FormatObjectName(SixnetDatabaseObjectName.Create(dmBulkCopy.DestinationTableName, Development.Data.SixnetDatabaseObjectType.Column)));
+
+                    dmBulkCopy.DestinationTableName = dmResolver.FormatObjectName(SixnetDatabaseObjectName.Create(dataTable.TableName, SixnetDatabaseObjectType.Table)).Name;
                     dmBulkCopy.WriteToServer(dataTable);
                 }
             }

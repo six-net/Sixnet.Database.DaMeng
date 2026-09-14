@@ -4,8 +4,10 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text;
+
 using Sixnet.Development.Data;
 using Sixnet.Development.Data.Command;
+using Sixnet.Development.Data.Dapper;
 using Sixnet.Development.Data.Database;
 using Sixnet.Development.Data.Field;
 using Sixnet.Development.Data.Field.Formatting;
@@ -18,20 +20,21 @@ namespace Sixnet.Database.DaMeng
     /// <summary>
     /// Defines command resolver for DaMeng
     /// </summary>
-    public partial class DaMengDataCommandResolver : SixnetBaseDataCommandResolver
+    public partial class SixnetDaMengDataCommandResolver : SixnetBaseDataCommandResolver
     {
         #region Constructor
 
-        public DaMengDataCommandResolver()
+        public SixnetDaMengDataCommandResolver()
         {
             DatabaseType = SixnetDatabaseType.DaMeng;
-            DefaultFieldFormatter = new DaMengDefaultFieldFormatter();
+            DefaultFieldFormatter = new SixnetDaMengDefaultFieldFormatter();
             ParameterPrefix = ":";
             KeywordPrefix = "\"";
             KeywordSuffix = "\"";
             TablePetNameKeyword = " ";
             RecursiveKeyword = "WITH";
             UseFieldForRecursive = true;
+            MaxIdentifierLength = 128;
             DbTypeDefaultValues = new Dictionary<DbType, string>()
             {
                 { DbType.Byte, "0" },
@@ -59,9 +62,12 @@ namespace Sixnet.Database.DaMeng
                 { SixnetFieldFormatterNames.JSON_VALUE,true},
                 { SixnetFieldFormatterNames.JSON_OBJECT,true}
             };
+            DisableDefaultPrimaryKeyAsc = true;
         }
 
         #endregion
+
+        #region Data access
 
         #region Get query statement
 
@@ -77,7 +83,7 @@ namespace Sixnet.Database.DaMeng
             var queryable = translationResult.GetOriginalQueryable();
             string sqlStatement;
             IEnumerable<ISixnetField> outputFields = null;
-            switch (queryable.ExecutionMode)
+            switch (queryable.Info.ExecutionMode)
             {
                 case SixnetQueryableExecutionMode.Script:
                     sqlStatement = translationResult.GetCondition();
@@ -90,7 +96,7 @@ namespace Sixnet.Database.DaMeng
                     var sort = translationResult.GetSort();
                     var hasSort = !string.IsNullOrWhiteSpace(sort);
                     //limit
-                    var limit = GetLimitString(queryable.SkipCount, queryable.TakeCount, hasSort);
+                    var limit = GetLimitString(queryable.Info.SkipCount, queryable.Info.TakeCount, hasSort);
                     //combine
                     var combine = translationResult.GetCombine();
                     var hasCombine = !string.IsNullOrWhiteSpace(combine);
@@ -120,7 +126,7 @@ namespace Sixnet.Database.DaMeng
                     }
 
                     // output fields
-                    if (outputFields.IsNullOrEmpty() || !queryable.SelectedFields.IsNullOrEmpty())
+                    if (outputFields.IsNullOrEmpty() || !queryable.Info.SelectedFields.IsNullOrEmpty())
                     {
                         outputFields = SixnetDataManager.GetQueryableFields(DatabaseType, queryable.GetModelType(), queryable, context.IsRootQueryable(queryable));
                     }
@@ -129,7 +135,7 @@ namespace Sixnet.Database.DaMeng
                     var preScript = GetPreScript(context, location);
                     //statement
                     sqlStatement = $"SELECT{GetDistinctString(queryable)} {outputFieldString} FROM {targetScript}{sort}{limit}";
-                    switch (queryable.OutputType)
+                    switch (queryable.Info.OutputType)
                     {
                         case SixnetQueryableOutputType.Count:
                             sqlStatement = hasCombine
@@ -145,6 +151,14 @@ namespace Sixnet.Database.DaMeng
                                     : $"{preScript}SELECT CASE WHEN EXISTS(({sqlStatement}){combine}) THEN 1 ELSE 0 END FROM DUAL"
                                 : $"{preScript}SELECT CASE WHEN EXISTS({sqlStatement}) THEN 1 ELSE 0 END FROM DUAL";
                             break;
+                        case SixnetQueryableOutputType.TempTable:
+                            sqlStatement = hasCombine
+                            ? hasSort
+                                ? $"(SELECT {tablePetName}.* FROM ({sqlStatement}){TablePetNameKeyword}{tablePetName}){combine}"
+                                : $"({sqlStatement}){combine}"
+                            : $"{sqlStatement}";
+                            sqlStatement = $"CREATE GLOBAL TEMPORARY TABLE {queryable.Info.TempTableName} ON COMMIT DELETE ROWS AS SELECT * FROM ({sqlStatement})";
+                            break;
                         default:
                             sqlStatement = hasCombine
                             ? hasSort
@@ -159,13 +173,7 @@ namespace Sixnet.Database.DaMeng
             //parameters
             var parameters = context.GetParameters();
 
-            //log script
-            if (location == SixnetQueryableLocation.Top)
-            {
-                LogScript(sqlStatement, parameters);
-            }
-
-            return SixnetQueryDatabaseStatement.Create(sqlStatement, parameters, outputFields);
+            return SixnetQueryDatabaseStatement.Create(DatabaseType, location, sqlStatement, parameters, outputFields);
         }
 
         #endregion
@@ -240,13 +248,13 @@ namespace Sixnet.Database.DaMeng
             var statements = new List<SixnetExecutionDatabaseStatement>();
             foreach (var tableName in tableNames)
             {
-                statements.Add(new SixnetExecutionDatabaseStatement()
+                statements.Add(SixnetExecutionDatabaseStatement.Create(DatabaseType, data =>
                 {
-                    Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName)),
-                    ScriptType = GetCommandType(command),
-                    Parameters = context.GetParameters(),
-                    MustAffectData = true
-                });
+                    data.Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName));
+                    data.ScriptType = GetCommandType(command);
+                    data.Parameters = context.GetParameters();
+                    data.MustAffectData = true;
+                }));
             }
 
             return statements;
@@ -317,14 +325,14 @@ namespace Sixnet.Database.DaMeng
             var statements = new List<SixnetExecutionDatabaseStatement>();
             foreach (var tableName in tableNames)
             {
-                statements.Add(new SixnetExecutionDatabaseStatement()
+                statements.Add(SixnetExecutionDatabaseStatement.Create(DatabaseType, data =>
                 {
-                    Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName)),
-                    ScriptType = GetCommandType(command),
-                    Parameters = parameters,
-                    MustAffectData = true,
-                    HasPreScript = !preScripts.IsNullOrEmpty()
-                });
+                    data.Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName));
+                    data.ScriptType = GetCommandType(command);
+                    data.Parameters = parameters;
+                    data.MustAffectData = true;
+                    data.HasPreScript = !preScripts.IsNullOrEmpty();
+                }));
             }
 
             #endregion
@@ -385,14 +393,14 @@ namespace Sixnet.Database.DaMeng
             var statements = new List<SixnetExecutionDatabaseStatement>();
             foreach (var tableName in tableNames)
             {
-                statements.Add(new SixnetExecutionDatabaseStatement()
+                statements.Add(SixnetExecutionDatabaseStatement.Create(DatabaseType, data =>
                 {
-                    Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName)),
-                    ScriptType = GetCommandType(command),
-                    MustAffectData = true,
-                    Parameters = parameters,
-                    HasPreScript = !string.IsNullOrWhiteSpace(preScript)
-                });
+                    data.Script = string.Format(scriptTemplate, FormatAndWrapObjectName(tableName));
+                    data.ScriptType = GetCommandType(command);
+                    data.MustAffectData = true;
+                    data.Parameters = parameters;
+                    data.HasPreScript = !string.IsNullOrWhiteSpace(preScript);
+                }));
             }
 
             #endregion
@@ -402,209 +410,510 @@ namespace Sixnet.Database.DaMeng
 
         #endregion
 
+        #endregion
+
+        #region Migration
+
         #region Get create table statements
 
-        /// <summary>
-        /// Get create table statements
-        /// </summary>
-        /// <param name="migrationCommand">Migration command</param>
-        /// <returns></returns>
-        protected override List<SixnetExecutionDatabaseStatement> GetCreateTableStatements(SixnetMigrationDatabaseCommand migrationCommand)
+        protected override SixnetDatabaseScriptInfo GetCreateTableScripts(SixnetGetCreateTableDefineScriptParameter parameter)
         {
-            var migrationInfo = migrationCommand.MigrationInfo;
-            if (migrationInfo?.NewTables.IsNullOrEmpty() ?? true)
+            var tableName = FormatObjectName(parameter.Table);
+            var columnInfo = parameter.ColumnDefineInfo;
+            var fields = columnInfo.ColumnScripts;
+            var parimaryKeys = columnInfo.PrimaryKeys;
+            var migrationInfo = parameter.MigrationInfo;
+            var script = $@"
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM ALL_TABLES
+        WHERE OWNER = '{parameter.Table.SchemaName}'
+          AND TABLE_NAME = '{tableName.Name}'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'CREATE TABLE {WrapObjectName(tableName).Name} ({string.Join(",", fields)}{(parimaryKeys.IsNullOrEmpty() ? "" : ", PRIMARY KEY (" + string.Join(",", parimaryKeys) + ")")})';
+    END IF;
+END;";
+            return new SixnetDatabaseScriptInfo()
             {
-                return new List<SixnetExecutionDatabaseStatement>(0);
-            }
-            var newTables = migrationInfo.NewTables;
-            var statements = new List<SixnetExecutionDatabaseStatement>();
-            var options = migrationCommand.MigrationInfo;
-            foreach (var newTableInfo in newTables)
-            {
-                if (newTableInfo?.EntityType == null || (newTableInfo?.TableNames.IsNullOrEmpty() ?? true))
-                {
-                    continue;
-                }
-                var entityType = newTableInfo.EntityType;
-                var entityConfig = SixnetEntityManager.GetEntityConfig(entityType);
-                SixnetDirectThrower.ThrowSixnetExceptionIf(entityConfig == null, $"Get entity config failed for {entityType.Name}");
-
-                var newFieldScripts = new List<string>();
-                var primaryKeyNames = new List<string>();
-                foreach (var field in entityConfig.AllFields)
-                {
-                    var dataField = SixnetDataManager.GetField(DaMengManager.CurrentDatabaseServerType, entityType, field.Value);
-                    if (dataField is SixnetDataField dataEntityField)
-                    {
-                        var dataFieldName = dataEntityField.GetFieldName(DatabaseType);
-                        newFieldScripts.Add($"{dataFieldName}{GetSqlDataType(dataEntityField, options)}{GetFieldNullable(dataEntityField, options)}{GetSqlDefaultValue(dataEntityField, options)}");
-                        if (dataEntityField.InRole(SixnetFieldRole.PrimaryKey))
-                        {
-                            primaryKeyNames.Add($"{dataFieldName}");
-                        }
-                    }
-                }
-                foreach (var tableName in newTableInfo.TableNames)
-                {
-                    var realTableName = FormatObjectName(tableName);
-                    var createTableStatement = new SixnetExecutionDatabaseStatement()
-                    {
-                        Script = $"DECLARE TB_EX NUMBER; BEGIN SELECT COUNT(*) INTO TB_EX FROM user_tables WHERE table_name = '{realTableName}'; IF TB_EX =0 THEN EXECUTE IMMEDIATE 'CREATE TABLE {realTableName} ({string.Join(",", newFieldScripts)}{(primaryKeyNames.IsNullOrEmpty() ? "" : $", CONSTRAINT PK_{realTableName} PRIMARY KEY ({string.Join(",", primaryKeyNames)})")})'; END IF; END;"
-                    };
-                    statements.Add(createTableStatement);
-
-                    // Log script
-                    LogExecutionStatement(createTableStatement);
-                }
-            }
-            return statements;
+                Scripts = new List<string>() { script }
+            };
         }
 
         #endregion
 
-        #region Get add filed statements
+        #region Get delete all table statements
 
-        /// <summary>
-        /// Get create field statement
-        /// </summary>
-        /// <param name="migrationCommand"></param>
-        /// <returns></returns>
-        protected override List<SixnetExecutionDatabaseStatement> GetAddFieldStatements(SixnetMigrationDatabaseCommand migrationCommand)
+        protected override SixnetDatabaseScriptInfo GetDeleteAllTableScripts(SixnetDeleteAllTableParameter parameter)
         {
-            if (migrationCommand?.MigrationInfo?.NewFields.IsNullOrEmpty() ?? true)
+            var schema = parameter.Schema;
+            var command = parameter.Command;
+            var sql = $@"
+SELECT
+    'DROP TABLE ""' 
+    || OWNER 
+    || '"".""' 
+    || TABLE_NAME 
+    || '"" CASCADE;' || CHR(13)
+FROM ALL_TABLES
+WHERE OWNER = '{schema}'
+AND TABLE_NAME NOT LIKE '##%';
+";
+            return new SixnetDatabaseScriptInfo()
             {
-                return new List<SixnetExecutionDatabaseStatement>(0);
-            }
-
-            var statements = new List<SixnetExecutionDatabaseStatement>();
-            foreach (var tableItem in migrationCommand.MigrationInfo.NewFields)
-            {
-                if (!tableItem.Value.IsNullOrEmpty())
-                {
-                    var formattedTableName = FormatAndWrapObjectName(tableItem.Key);
-                    foreach (var field in tableItem.Value)
-                    {
-                        var dataFieldName = FormatObjectName(SixnetDatabaseObjectName.Create(field.GetFieldName(DatabaseType), SixnetDatabaseObjectType.Column));
-                        var newFieldStatement = new SixnetExecutionDatabaseStatement()
-                        {
-                            Script = $"IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE [object_id]=OBJECT_ID('{formattedTableName}') AND [name]='{dataFieldName.Name}') BEGIN ALTER TABLE {formattedTableName} ADD {WrapObjectName(dataFieldName).Name}{GetFieldDefinition(field, migrationCommand.MigrationInfo)}; END "
-                        };
-                        statements.Add(newFieldStatement);
-                        // Log script
-                        LogExecutionStatement(newFieldStatement);
-                    }
-                }
-            }
-            return statements;
-        }
-
-        #endregion
-
-        #region Get delete filed statements
-
-        protected override List<SixnetExecutionDatabaseStatement> GetDeleteFieldStatements(SixnetMigrationDatabaseCommand migrationCommand)
-        {
-            if (migrationCommand?.MigrationInfo?.DeletableFields.IsNullOrEmpty() ?? true)
-            {
-                return new List<SixnetExecutionDatabaseStatement>(0);
-            }
-
-            var statements = new List<SixnetExecutionDatabaseStatement>();
-            foreach (var tableItem in migrationCommand.MigrationInfo.DeletableFields)
-            {
-                if (!tableItem.Value.IsNullOrEmpty())
-                {
-                    var formattedTableName = FormatAndWrapObjectName(tableItem.Key);
-                    foreach (var field in tableItem.Value)
-                    {
-                        var dataFieldName = FormatObjectName(SixnetDatabaseObjectName.Create(field.GetFieldName(DatabaseType), SixnetDatabaseObjectType.Column));
-                        var deleteStatement = new SixnetExecutionDatabaseStatement()
-                        {
-                            Script = $"IF EXISTS (SELECT 1 FROM sys.columns WHERE [object_id]=OBJECT_ID('{formattedTableName}') AND [name]='{dataFieldName.Name}') BEGIN ALTER TABLE {formattedTableName} DROP COLUMN {WrapObjectName(dataFieldName).Name}; END "
-                        };
-                        statements.Add(deleteStatement);
-                        // Log script
-                        LogExecutionStatement(deleteStatement);
-                    }
-                }
-            }
-            return statements;
-        }
-
-        #endregion
-
-        #region Get update field statements 
-
-        protected override List<SixnetExecutionDatabaseStatement> GetUpdateFieldStatements(SixnetMigrationDatabaseCommand migrationCommand)
-        {
-            if (migrationCommand?.MigrationInfo?.UpdatableFields.IsNullOrEmpty() ?? true)
-            {
-                return new List<SixnetExecutionDatabaseStatement>(0);
-            }
-
-            var statements = new List<SixnetExecutionDatabaseStatement>();
-            foreach (var tableItem in migrationCommand.MigrationInfo.UpdatableFields)
-            {
-                if (tableItem.Value.IsNullOrEmpty())
-                {
-                    continue;
-                }
-                var formattedTableName = FormatAndWrapObjectName(tableItem.Key);
-                foreach (var fieldItem in tableItem.Value)
-                {
-                    var field = fieldItem.Value;
-                    var nowFieldName = fieldItem.Key;
-                    var newFieldName = FormatObjectName(SixnetDatabaseObjectName.Create(field.GetFieldName(DatabaseType), SixnetDatabaseObjectType.Column));
-                    var updateStatement = new SixnetExecutionDatabaseStatement()
-                    {
-                        Script = $"IF EXISTS (SELECT 1 FROM sys.columns WHERE [object_id]=OBJECT_ID('{formattedTableName}') AND [name]='{nowFieldName}') BEGIN ALTER TABLE {formattedTableName} ALTER COLUMN {WrapObjectName(SixnetDatabaseObjectName.Create(nowFieldName, SixnetDatabaseObjectType.Column)).Name}{GetFieldDefinition(field, migrationCommand.MigrationInfo)}; END "
-                    };
-                    statements.Add(updateStatement);
-                    LogExecutionStatement(updateStatement);
-                    if (!string.Equals(nowFieldName, newFieldName.Name, StringComparison.OrdinalIgnoreCase))
-                    {
-                        var renameStatement = new SixnetExecutionDatabaseStatement()
-                        {
-                            Script = $"IF EXISTS (SELECT 1 FROM sys.columns WHERE [object_id]=OBJECT_ID('{formattedTableName}') AND [name]='{nowFieldName}') EXEC sp_rename '{formattedTableName}.{nowFieldName}', {WrapObjectName(newFieldName).Name}, 'COLUMN'; END "
-                        };
-                        statements.Add(renameStatement);
-                        LogExecutionStatement(renameStatement);
-                    }
-                }
-            }
-            return statements;
+                Scripts = command.Connection.DbConnection.Query<string>(sql, transaction: command.Connection.Transaction.DbTransaction)?.ToList() ?? new List<string>(0)
+            };
         }
 
         #endregion
 
         #region Get rename table statements
 
-        protected override List<SixnetExecutionDatabaseStatement> GetRenameTableStatements(SixnetMigrationDatabaseCommand migrationCommand)
+        /// <summary>
+        /// Get rename table statements
+        /// </summary>
+        /// <param name="parameter"></param>
+        /// <returns></returns>
+        protected override SixnetDatabaseScriptInfo GetRenameTableScripts(SixnetRenameTableParameter parameter)
         {
-            var migrationInfo = migrationCommand?.MigrationInfo;
-            if (migrationInfo?.RenameTables.IsNullOrEmpty() ?? true)
+            var oldFormattedTableName = FormatObjectName(parameter.CurrentTableName);
+            var newFormattedTableName = FormatObjectName(parameter.NewTableName);
+            var script = $@"
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM ALL_TABLES
+        WHERE TABLE_NAME = '{oldFormattedTableName.Name}' AND OWNER = '{oldFormattedTableName.SchemaName}'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE ""' || '{WrapObjectName(oldFormattedTableName)}' ||
+            '"" RENAME TO ""' || '{WrapObjectName(newFormattedTableName).Name}' || '""';
+    END IF;
+END;";
+            return new SixnetDatabaseScriptInfo()
             {
-                return new List<SixnetExecutionDatabaseStatement>(0);
-            }
-            var renameTables = migrationInfo.RenameTables;
-            var statements = new List<SixnetExecutionDatabaseStatement>();
-            foreach (var tableItem in renameTables)
-            {
-                var oldFormattedTableName = FormatAndWrapObjectName(tableItem.Key);
-                var newFormattedTableName = FormatObjectName(tableItem.Value);
-                var renameTableStatement = new SixnetExecutionDatabaseStatement()
+                Scripts = new List<string>()
                 {
-                    Script = $"IF OBJECT_ID('{oldFormattedTableName}', 'U') IS NOT NULL BEGIN EXEC sp_rename '{oldFormattedTableName}', '{newFormattedTableName.Name}'; END"
-                };
-                statements.Add(renameTableStatement);
-
-                // Log script
-                LogExecutionStatement(renameTableStatement);
-            }
-            return statements;
+                    script
+                }
+            };
         }
 
         #endregion
+
+
+        #region Get add filed statements
+
+        /// <summary>
+        /// Get add field scripts
+        /// </summary>
+        /// <param name="parameter"></param>
+        /// <returns></returns>
+        protected override SixnetDatabaseScriptInfo GetAddFieldScripts(SixnetAddFieldParameter parameter)
+        {
+            var table = parameter.Table;
+            var fields = parameter.Fields;
+            var command = parameter.Command;
+            var formattedTableName = FormatObjectName(table);
+            var scripts = new List<string>();
+            foreach (var field in fields)
+            {
+                var dataFieldName = FormatObjectName(SixnetDatabaseObjectName.Create(field.GetFieldName(DatabaseType), SixnetDatabaseObjectType.Column));
+                scripts.Add($@"
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM ALL_TAB_COLUMNS
+        WHERE TABLE_NAME = '{formattedTableName.Name}' AND OWNER = '{formattedTableName.SchemaName}' AND COLUMN_NAME = '{dataFieldName.Name}'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE {WrapObjectName(formattedTableName)} ADD {WrapObjectName(dataFieldName).Name} {GetFieldDefinition(field, command.MigrationInfo)}';
+    END IF;
+END;");
+            }
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = scripts
+            };
+        }
+
+        #endregion
+
+        #region Get delete filed statements
+
+        protected override SixnetDatabaseScriptInfo GetDeleteFieldScripts(SixnetDeleteFieldParameter parameter)
+        {
+            var scripts = new List<string>();
+            var table = parameter.Table;
+            var fields = parameter.Fields;
+            var formattedTableName = FormatObjectName(table);
+            foreach (var field in fields)
+            {
+                var dataFieldName = FormatObjectName(SixnetDatabaseObjectName.Create(field.GetFieldName(DatabaseType), SixnetDatabaseObjectType.Column));
+                scripts.Add($@"
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM ALL_TAB_COLUMNS
+        WHERE TABLE_NAME = '{formattedTableName.Name}' AND OWNER = '{formattedTableName.SchemaName}' AND COLUMN_NAME = '{dataFieldName.Name}'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE {WrapObjectName(formattedTableName)} DROP COLUMN {WrapObjectName(dataFieldName).Name}';
+    END IF;
+END;");
+            }
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = scripts
+            };
+        }
+
+        #endregion
+
+        #region Get update field statements 
+
+        /// <summary>
+        /// Get update field scripts
+        /// </summary>
+        /// <param name="parameter"></param>
+        /// <returns></returns>
+        protected override SixnetDatabaseScriptInfo GetUpdateFieldScripts(SixnetUpdateFieldParameter parameter)
+        {
+            var scripts = new List<string>();
+            var table = parameter.Table;
+            var fields = parameter.Fields;
+            var command = parameter.Command;
+            var formattedTableName = FormatObjectName(table);
+            foreach (var fieldItem in fields)
+            {
+                var field = fieldItem.Value;
+                var nowFieldName = fieldItem.Key;
+                var nowFormatedFieldName = FormatObjectName(SixnetDatabaseObjectName.Create(nowFieldName, SixnetDatabaseObjectType.Column));
+                var newFieldName = FormatObjectName(SixnetDatabaseObjectName.Create(field.GetFieldName(DatabaseType), SixnetDatabaseObjectType.Column));
+
+                scripts.Add($@"
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM ALL_TAB_COLUMNS
+        WHERE TABLE_NAME = '{formattedTableName.Name}' AND OWNER = '{formattedTableName.SchemaName}' AND COLUMN_NAME = '{nowFormatedFieldName.Name}'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE {WrapObjectName(formattedTableName)} MODIFY {WrapObjectName(nowFormatedFieldName).Name} {GetFieldDefinition(field, command.MigrationInfo)}';
+    END IF;
+END;");
+                if (!string.Equals(nowFormatedFieldName.Name, newFieldName.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    scripts.Add($@"
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM ALL_TAB_COLUMNS
+        WHERE TABLE_NAME = '{formattedTableName.Name}' AND OWNER = '{formattedTableName.SchemaName}' AND COLUMN_NAME = '{nowFormatedFieldName.Name}'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE {WrapObjectName(formattedTableName)} RENAME COLUMN {WrapObjectName(nowFormatedFieldName).Name} TO {WrapObjectName(newFieldName).Name}';
+    END IF;
+END;");
+                }
+            }
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = scripts
+            };
+        }
+
+        #endregion
+
+
+        #region Add foreign key
+
+        /// <summary>
+        /// Get add foreign key scripts
+        /// </summary>
+        /// <param name="parameter"></param>
+        /// <returns></returns>
+        protected override SixnetDatabaseScriptInfo GetAddForeignKeyScripts(SixnetAddForeignKeyParameter parameter)
+        {
+            var foreignKeyInfo = parameter.ForeignKeyInfo;
+
+            var sourceFieldName = FormatObjectName(foreignKeyInfo.SourceField);
+            var formattedSourceTableName = FormatObjectName(foreignKeyInfo.SourceTable);
+            var wrapedSourceTableName = FormatAndWrapObjectName(foreignKeyInfo.SourceTable);
+
+            var referenceFieldName = FormatAndWrapObjectName(foreignKeyInfo.ReferenceField);
+            var referenceTableName = FormatAndWrapObjectName(foreignKeyInfo.ReferenceTable);
+
+            var constraintName = GetForeignKeyName(formattedSourceTableName, sourceFieldName);
+
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = new List<string>()
+                {
+                    $@"
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM ALL_CONSTRAINTS
+        WHERE TABLE_NAME = '{formattedSourceTableName.Name}'
+          AND OWNER = '{formattedSourceTableName.SchemaName}'
+          AND CONSTRAINT_NAME = '{constraintName.Name}'
+          AND CONSTRAINT_TYPE = 'R'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE {wrapedSourceTableName}
+             ADD CONSTRAINT {WrapObjectName(constraintName).Name}
+             FOREIGN KEY ({WrapObjectName(sourceFieldName).Name})
+             REFERENCES {referenceTableName} ({referenceFieldName})';
+    END IF;
+END;"
+                }
+            };
+        }
+
+        #endregion
+
+        #region Delete foreign key
+
+        /// <summary>
+        /// Get delete foreign key scripts
+        /// </summary>
+        /// <param name="parameter"></param>
+        /// <returns></returns>
+        public override SixnetDatabaseScriptInfo GetDeleteForeignKeyScripts(SixnetDeleteForeignKeyParameter parameter)
+        {
+            var foreignKeyInfo = parameter.ForeignKeyInfo;
+            var sourceFieldName = FormatObjectName(foreignKeyInfo.SourceField);
+            var formattedSourceTableName = FormatObjectName(foreignKeyInfo.SourceTable);
+            var wrapedSourceTableName = FormatAndWrapObjectName(foreignKeyInfo.SourceTable);
+            var constraintName = GetForeignKeyName(formattedSourceTableName, sourceFieldName);
+
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = new List<string>()
+                {
+                    $@"
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM ALL_CONSTRAINTS
+        WHERE TABLE_NAME = '{formattedSourceTableName.Name}'
+          AND OWNER = '{formattedSourceTableName.SchemaName}'
+          AND CONSTRAINT_NAME = '{constraintName.Name}'
+          AND CONSTRAINT_TYPE = 'R'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'ALTER TABLE {wrapedSourceTableName} DROP CONSTRAINT {WrapObjectName(constraintName)}';
+    END IF;
+END;"
+                }
+            };
+        }
+
+        /// <summary>
+        /// Get delete all foreign key scripts
+        /// </summary>
+        /// <param name="parameter"></param>
+        /// <returns></returns>
+        protected override SixnetDatabaseScriptInfo GetDeleteAllForeignKeyScripts(SixnetDeleteAllForeignKeyParameter parameter)
+        {
+            var sql = $@"
+SELECT
+    'ALTER TABLE ""' 
+    || OWNER 
+    || '"".""' 
+    || TABLE_NAME 
+    || '"" DROP CONSTRAINT ""' 
+    || CONSTRAINT_NAME 
+    || '"";'
+FROM ALL_CONSTRAINTS
+WHERE OWNER = '{parameter.Schema}' AND CONSTRAINT_TYPE = 'R';
+";
+            var deleteScripts = parameter.Command.Connection.DbConnection.Query<string>(sql, transaction: parameter.Command.Connection.Transaction.DbTransaction);
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = deleteScripts.ToList()
+            };
+        }
+
+        #endregion
+
+
+        #region Add index
+
+        /// <summary>
+        /// Get add index scripts
+        /// </summary>
+        /// <param name="parameter"></param>
+        /// <returns></returns>
+        protected override SixnetDatabaseScriptInfo GetAddIndexScripts(SixnetAddIndexParameter parameter)
+        {
+            var indexInfo = parameter.IndexInfo;
+            var formattedTableName = FormatObjectName(indexInfo.Table);
+            var indexDefine = GetIndexDefine(indexInfo);
+            var indexName = indexDefine.Item1;
+            var indexFieldStrings = indexDefine.Item2;
+
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = new List<string>()
+                {
+                    $@"
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM ALL_INDEXES
+        WHERE OWNER = '{formattedTableName.SchemaName}' AND TABLE_NAME = '{formattedTableName.Name}' AND INDEX_NAME = '{indexName.Name}'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'CREATE {(indexInfo.Unique ? "UNIQUE " : "")}INDEX {WrapObjectName(indexName).Name}
+             ON {WrapObjectName(formattedTableName)} ({string.Join(",", indexFieldStrings)})';
+    END IF;
+END;"
+                }
+            };
+        }
+
+        #endregion
+
+        #region Delete index
+
+        /// <summary>
+        /// Get delete index scripts
+        /// </summary>
+        /// <param name="parameter"></param>
+        /// <returns></returns>
+        protected override SixnetDatabaseScriptInfo GetDeleteIndexScripts(SixnetDeleteIndexParameter parameter)
+        {
+            var indexInfo = parameter.IndexInfo;
+            var indexName = GetIndexDefine(indexInfo).Item1;
+            var formattedTableName = FormatObjectName(indexInfo.Table);
+
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = new List<string>()
+                {
+                    $@"
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM ALL_INDEXES
+        WHERE OWNER = '{formattedTableName.SchemaName}'
+          AND TABLE_NAME = '{formattedTableName.Name}'
+          AND INDEX_NAME = '{indexName.Name}'
+    ) THEN
+        EXECUTE IMMEDIATE
+            'DROP INDEX {formattedTableName.SchemaName}.{WrapObjectName(indexName).Name}';
+    END IF;
+END;"
+                }
+            };
+        }
+
+        #endregion
+
+
+        #region Get delete all view statements
+
+        protected override SixnetDatabaseScriptInfo GetDeleteAllViewScripts(SixnetDeleteAllViewParameter parameter)
+        {
+            var sql = $@"
+SELECT
+    'DROP VIEW ""' 
+    || OWNER 
+    || '"".""' 
+    || VIEW_NAME 
+    || '"";' || CHR(13)
+FROM ALL_VIEWS
+WHERE OWNER = '{parameter.Schema}';
+";
+            var deleteScripts = parameter.Command.Connection.DbConnection.Query<string>(sql, transaction: parameter.Command.Connection.Transaction.DbTransaction);
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = deleteScripts?.ToList() ?? new List<string>(0)
+            };
+        }
+
+        #endregion
+
+        #region Get delete all function statements
+
+        /// <summary>
+        /// Get delete all function statements
+        /// </summary>
+        /// <param name="migrationCommand"></param>
+        /// <returns></returns>
+        protected override SixnetDatabaseScriptInfo GetDeleteAllFunctionScripts(SixnetDeleteAllFunctionParameter parameter)
+        {
+            var sql = $@"
+SELECT
+    'DROP FUNCTION ""' 
+    || OWNER 
+    || '"".""' 
+    || OBJECT_NAME 
+    || '"";' || CHR(13)
+FROM ALL_OBJECTS
+WHERE OWNER = '{parameter.Schema}' AND OBJECT_TYPE = 'FUNCTION';
+";
+            var deleteScripts = parameter.Command.Connection.DbConnection.Query<string>(sql, transaction: parameter.Command.Connection.Transaction.DbTransaction);
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = deleteScripts?.ToList() ?? new List<string>(0)
+            };
+        }
+
+        #endregion
+
+        #region Get delete all custom type statements
+
+        protected override SixnetDatabaseScriptInfo GetDeleteAllCustomTypeScripts(SixnetDeleteAllCustomerTypeParameter parameter)
+        {
+            var sql = $@"
+SELECT
+    'DROP TYPE ""'
+    || OWNER
+    || '"".""'
+    || OBJECT_NAME
+    || '"";' || CHR(13)
+FROM ALL_OBJECTS
+WHERE OWNER = '{parameter.Schema}' AND OBJECT_TYPE = 'TYPE';
+";
+            var deleteScripts = parameter.Command.Connection.DbConnection.Query<string>(sql, transaction: parameter.Command.Connection.Transaction.DbTransaction);
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = deleteScripts?.ToList() ?? new List<string>(0)
+            };
+        }
+
+        #endregion
+
+        #region Get delete all procedure statements
+
+        protected override SixnetDatabaseScriptInfo GetDeleteAllProcedureScripts(SixnetDeleteAllProcedureParameter parameter)
+        {
+            var sql = $@"
+  SELECT
+    'DROP PROCEDURE ""'
+    || OWNER
+    || '"".""'
+    || OBJECT_NAME
+    || '"";' || CHR(13)
+FROM ALL_OBJECTS
+WHERE OWNER = '{parameter.Schema}' AND OBJECT_TYPE = 'PROCEDURE';
+";
+            var deleteScripts = parameter.Command.Connection.DbConnection.Query<string>(sql, transaction: parameter.Command.Connection.Transaction.DbTransaction);
+            return new SixnetDatabaseScriptInfo()
+            {
+                Scripts = deleteScripts?.ToList() ?? new List<string>(0)
+            };
+        }
+
+        #endregion
+
+        #endregion
+
+        #region Util
 
         #region Get combine operator
 
@@ -710,7 +1019,7 @@ namespace Sixnet.Database.DaMeng
                         dbTypeName = "BINARY_DOUBLE";
                         break;
                     case DbType.Guid:
-                        dbTypeName = "RAW(16)";
+                        dbTypeName = "CHAR(36)";
                         break;
                     case DbType.Int16:
                     case DbType.UInt16:
@@ -739,7 +1048,7 @@ namespace Sixnet.Database.DaMeng
                         dbTypeName = $"NVARCHAR2({getCharLength(length, DefaultCharLength)})";
                         break;
                     case DbType.Time:
-                        dbTypeName = $"INTERVAL DAY(8) TO SECOND(7)";
+                        dbTypeName = $"INTERVAL DAY(9) TO SECOND(6)";
                         break;
                     case DbType.Xml:
                         dbTypeName = "CLOB";
@@ -750,6 +1059,39 @@ namespace Sixnet.Database.DaMeng
             }
             return $" {dbTypeName}";
         }
+
+        #endregion
+
+        #region Get field identity
+
+        /// <summary>
+        /// Get field identity
+        /// </summary>
+        /// <param name="field">Field</param>
+        /// <param name="options">Options</param>
+        /// <returns></returns>
+        protected override string GetFieldIdentity(SixnetDataField field, SixnetMigrationInfo options)
+        {
+            SixnetDirectThrower.ThrowArgNullIf(field == null, nameof(field));
+            if (!field.InRole(SixnetFieldRole.Increment))
+            {
+                return string.Empty;
+            }
+            var startValue = field.StartValue;
+            if (startValue == 0)
+            {
+                startValue = 1;
+            }
+            var incrementValue = field.IncrementValue;
+            if (incrementValue == 0)
+            {
+                incrementValue = 1;
+            }
+
+            return $" IDENTITY({startValue}, {incrementValue})";
+        }
+
+        #endregion
 
         #endregion
     }

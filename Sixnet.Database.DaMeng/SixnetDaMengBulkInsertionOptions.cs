@@ -8,7 +8,7 @@ namespace Sixnet.Database.DaMeng
     /// <summary>
     /// Defines DaMeng bulk insertion options
     /// </summary>
-    public class DaMengBulkInsertionOptions : ISixnetBulkInsertionOptions
+    public class SixnetDaMengBulkInsertionOptions : ISixnetBulkInsertionOptions
     {
         /// <summary>
         /// Gets or sets the data operation options

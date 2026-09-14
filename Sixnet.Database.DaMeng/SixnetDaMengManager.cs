@@ -8,7 +8,7 @@ namespace Sixnet.Database.DaMeng
     /// <summary>
     /// Defines DaMeng manager
     /// </summary>
-    internal static class DaMengManager
+    internal static class SixnetDaMengManager
     {
         #region Fields
 
@@ -20,12 +20,12 @@ namespace Sixnet.Database.DaMeng
         /// <summary>
         /// DaMeng options
         /// </summary>
-        internal static readonly DaMengOptions DaMengOptions = new DaMengOptions();
+        internal static readonly SixnetDaMengOptions DaMengOptions = new SixnetDaMengOptions();
 
         /// <summary>
         /// Default query translator
         /// </summary>
-        static readonly DaMengDataCommandResolver DefaultResolver = new DaMengDataCommandResolver();
+        static readonly SixnetDaMengDataCommandResolver DefaultResolver = new SixnetDaMengDataCommandResolver();
 
         #endregion
 
@@ -49,7 +49,7 @@ namespace Sixnet.Database.DaMeng
         /// Get command resolver
         /// </summary>
         /// <returns>Return a command resolver</returns>
-        internal static DaMengDataCommandResolver GetCommandResolver()
+        internal static SixnetDaMengDataCommandResolver GetCommandResolver()
         {
             return DefaultResolver;
         }
