@@ -528,7 +528,7 @@ BEGIN
         WHERE TABLE_NAME = '{formattedTableName.Name}' AND OWNER = '{formattedTableName.SchemaName}' AND COLUMN_NAME = '{dataFieldName.Name}'
     ) THEN
         EXECUTE IMMEDIATE
-            'ALTER TABLE {WrapObjectName(formattedTableName)} ADD {WrapObjectName(dataFieldName).Name} {GetFieldDefinition(field, command.MigrationInfo)}';
+            'ALTER TABLE {WrapObjectName(formattedTableName)} ADD {WrapObjectName(dataFieldName).Name} {GetFieldDefinition(table, field, command.MigrationInfo)}';
     END IF;
 END;");
             }
@@ -600,7 +600,7 @@ BEGIN
         WHERE TABLE_NAME = '{formattedTableName.Name}' AND OWNER = '{formattedTableName.SchemaName}' AND COLUMN_NAME = '{nowFormatedFieldName.Name}'
     ) THEN
         EXECUTE IMMEDIATE
-            'ALTER TABLE {WrapObjectName(formattedTableName)} MODIFY {WrapObjectName(nowFormatedFieldName).Name} {GetFieldDefinition(field, command.MigrationInfo)}';
+            'ALTER TABLE {WrapObjectName(formattedTableName)} MODIFY {WrapObjectName(nowFormatedFieldName).Name} {GetFieldDefinition(table, field, command.MigrationInfo)}';
     END IF;
 END;");
                 if (!string.Equals(nowFormatedFieldName.Name, newFieldName.Name, StringComparison.OrdinalIgnoreCase))
